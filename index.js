@@ -10,7 +10,7 @@ const { Client } = pkg;
 
  
 const client = new Client({
-  connectionString: NEON_DB
+  connectionString: process.env.NEON_DB
 })
 
 // postgres://postgres:yourpassword@localhost:5432/yourdatabase
