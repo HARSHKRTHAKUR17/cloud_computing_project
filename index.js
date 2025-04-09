@@ -1,11 +1,36 @@
 import express from "express";
 import bodyParser from "body-parser";
-import pg from "pg";
 import bcrypt from "bcrypt";
 import passport from "passport";
 import { Strategy } from "passport-local";
 import session from "express-session";
 import env from "dotenv";
+import pkg from 'pg';
+const { Client } = pkg;
+
+ 
+const client = new Client({
+  connectionString: "postgresql://neondb_owner:npg_aNGVCB59yQbg@ep-lucky-unit-a1xymtwo-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
+})
+
+// postgres://postgres:yourpassword@localhost:5432/yourdatabase
+
+await client.connect();
+
+async function createUsersTable() {
+    await client.connect()
+    const result = await client.query(`
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            password VARCHAR(255) NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+    `)
+    console.log(result)
+}
+
+//createUsersTable();
 
 const app = express();
 const port = 3000;
@@ -26,14 +51,6 @@ app.use(express.static("public"));
 app.use(passport.initialize());
 app.use(passport.session());
 
-const db = new pg.Client({
-  user: process.env.PG_USER,
-  host: process.env.PG_HOST,
-  database: process.env.PG_DATABASE,
-  password: process.env.PG_PASSWORD,
-  port: process.env.PG_PORT,
-});
-db.connect();
 
 app.get("/", (req, res) => {
   res.render("home.ejs");
@@ -55,6 +72,26 @@ app.get("/logout", (req, res) => {
     res.redirect("/");
   });
 });
+
+app.get("/music",(req, res)=>{
+  res.render("music.ejs")
+});
+
+app.get("/arts",(req, res)=>{
+  res.render("arts.ejs")
+;})
+
+app.get("/drumkit",(req, res)=>{
+  res.render("drumkit.ejs")
+});
+
+app.get("/paint",(req, res)=>{
+  res.render("paint.ejs")
+});
+
+app.get("/science",(req, res)=>{
+  res.redirect("https://fold.it/play")
+;})
 
 app.get("/secrets", (req, res) => {
   console.log(req.user);
@@ -78,73 +115,82 @@ app.post("/register", async (req, res) => {
   const password = req.body.password;
 
   try {
-    const checkResult = await db.query("SELECT * FROM users WHERE email = $1", [
-      email,
-    ]);
+    const checkResult = await client.query("SELECT * FROM users WHERE email = $1", [email]);
 
     if (checkResult.rows.length > 0) {
-      req.redirect("/login");
+      res.redirect("/login");
     } else {
       bcrypt.hash(password, saltRounds, async (err, hash) => {
         if (err) {
           console.error("Error hashing password:", err);
+          res.status(500).send("Server error");
         } else {
-          const result = await db.query(
+          const insertResult = await client.query(
             "INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *",
             [email, hash]
           );
-          const user = result.rows[0];
+          const user = insertResult.rows[0];
+
           req.login(user, (err) => {
-            console.log("success");
+            if (err) {
+              console.error(err);
+              return res.redirect("/login");
+            }
             res.redirect("/secrets");
           });
         }
       });
     }
   } catch (err) {
-    console.log(err);
+    console.error("DB error:", err);
+    res.status(500).send("Internal server error");
   }
 });
 
 passport.use(
   new Strategy(async function verify(username, password, cb) {
     try {
-      const result = await db.query("SELECT * FROM users WHERE email = $1 ", [
-        username,
-      ]);
+      const result = await client.query("SELECT * FROM users WHERE email = $1", [username]);
+
       if (result.rows.length > 0) {
         const user = result.rows[0];
         const storedHashedPassword = user.password;
+
         bcrypt.compare(password, storedHashedPassword, (err, valid) => {
           if (err) {
-            //Error with password check
             console.error("Error comparing passwords:", err);
             return cb(err);
+          }
+
+          if (valid) {
+            return cb(null, user); 
           } else {
-            if (valid) {
-              //Passed password check
-              return cb(null, user);
-            } else {
-              //Did not pass password check
-              return cb(null, false);
-            }
+            return cb(null, false); 
           }
         });
       } else {
-        return cb("User not found");
+        return cb(null, false); 
       }
     } catch (err) {
-      console.log(err);
+      console.error("Error during authentication:", err);
+      return cb(err);
     }
   })
 );
 
 passport.serializeUser((user, cb) => {
-  cb(null, user);
+  cb(null, user.id);
 });
-passport.deserializeUser((user, cb) => {
-  cb(null, user);
+
+passport.deserializeUser(async (id, cb) => {
+  try {
+    const result = await client.query("SELECT * FROM users WHERE id = $1", [id]);
+    cb(null, result.rows[0]);
+  } catch (err) {
+    cb(err, null);
+  }
 });
+
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
