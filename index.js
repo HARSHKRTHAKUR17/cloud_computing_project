@@ -5,37 +5,26 @@ import passport from "passport";
 import { Strategy } from "passport-local";
 import session from "express-session";
 import env from "dotenv";
-import pkg from 'pg';
+import pkg from "pg";
 const { Client } = pkg;
 
- 
+// Load environment variables
+env.config();
+
+// PostgreSQL connection
 const client = new Client({
-  connectionString: process.env.NEON_DB
-})
+  connectionString: process.env.NEON_DB,
+});
+await client.connect(); // Ensure DB connection before any query
 
-// postgres://postgres:yourpassword@localhost:5432/yourdatabase
-
-await client.connect();
-
-async function createUsersTable() {
-    await client.connect()
-    const result = await client.query(`
-        CREATE TABLE users (
-            id SERIAL PRIMARY KEY,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        );
-    `)
-    console.log(result)
-}
-
-//createUsersTable();
-
+// Express setup
 const app = express();
 const port = 3000;
 const saltRounds = 10;
-env.config();
+
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.static("public"));
+app.set("view engine", "ejs");
 
 app.use(
   session({
@@ -45,13 +34,10 @@ app.use(
   })
 );
 
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static("public"));
-
 app.use(passport.initialize());
 app.use(passport.session());
 
-
+// ROUTES
 app.get("/", (req, res) => {
   res.render("home.ejs");
 });
@@ -65,36 +51,33 @@ app.get("/register", (req, res) => {
 });
 
 app.get("/logout", (req, res) => {
-  req.logout(function (err) {
-    if (err) {
-      return next(err);
-    }
+  req.logout((err) => {
+    if (err) return next(err);
     res.redirect("/");
   });
 });
 
-app.get("/music",(req, res)=>{
-  res.render("music.ejs")
+app.get("/music", (req, res) => {
+  res.render("music.ejs");
 });
 
-app.get("/arts",(req, res)=>{
-  res.render("arts.ejs")
-;})
-
-app.get("/drumkit",(req, res)=>{
-  res.render("drumkit.ejs")
+app.get("/arts", (req, res) => {
+  res.render("arts.ejs");
 });
 
-app.get("/paint",(req, res)=>{
-  res.render("paint.ejs")
+app.get("/drumkit", (req, res) => {
+  res.render("drumkit.ejs");
 });
 
-app.get("/science",(req, res)=>{
-  res.redirect("https://fold.it/play")
-;})
+app.get("/paint", (req, res) => {
+  res.render("paint.ejs");
+});
+
+app.get("/science", (req, res) => {
+  res.redirect("https://fold.it/play");
+});
 
 app.get("/secrets", (req, res) => {
-  console.log(req.user);
   if (req.isAuthenticated()) {
     res.render("secrets.ejs");
   } else {
@@ -122,23 +105,24 @@ app.post("/register", async (req, res) => {
     } else {
       bcrypt.hash(password, saltRounds, async (err, hash) => {
         if (err) {
-          console.error("Error hashing password:", err);
-          res.status(500).send("Server error");
-        } else {
-          const insertResult = await client.query(
-            "INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *",
-            [email, hash]
-          );
-          const user = insertResult.rows[0];
-
-          req.login(user, (err) => {
-            if (err) {
-              console.error(err);
-              return res.redirect("/login");
-            }
-            res.redirect("/secrets");
-          });
+          console.error("Hash error:", err);
+          return res.send("Server error");
         }
+
+        const insertResult = await client.query(
+          "INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *",
+          [email, hash]
+        );
+
+        const user = insertResult.rows[0];
+
+        req.login(user, (err) => {
+          if (err) {
+            console.error("Login error:", err);
+            return res.redirect("/login");
+          }
+          res.redirect("/secrets");
+        });
       });
     }
   } catch (err) {
@@ -147,40 +131,27 @@ app.post("/register", async (req, res) => {
   }
 });
 
+// Passport setup
 passport.use(
   new Strategy(async function verify(username, password, cb) {
     try {
       const result = await client.query("SELECT * FROM users WHERE email = $1", [username]);
 
-      if (result.rows.length > 0) {
-        const user = result.rows[0];
-        const storedHashedPassword = user.password;
+      if (result.rows.length === 0) return cb(null, false);
 
-        bcrypt.compare(password, storedHashedPassword, (err, valid) => {
-          if (err) {
-            console.error("Error comparing passwords:", err);
-            return cb(err);
-          }
-
-          if (valid) {
-            return cb(null, user); 
-          } else {
-            return cb(null, false); 
-          }
-        });
-      } else {
-        return cb(null, false); 
-      }
+      const user = result.rows[0];
+      bcrypt.compare(password, user.password, (err, valid) => {
+        if (err) return cb(err);
+        if (valid) return cb(null, user);
+        else return cb(null, false);
+      });
     } catch (err) {
-      console.error("Error during authentication:", err);
       return cb(err);
     }
   })
 );
 
-passport.serializeUser((user, cb) => {
-  cb(null, user.id);
-});
+passport.serializeUser((user, cb) => cb(null, user.id));
 
 passport.deserializeUser(async (id, cb) => {
   try {
@@ -191,7 +162,7 @@ passport.deserializeUser(async (id, cb) => {
   }
 });
 
-
+// Server start
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
