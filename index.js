@@ -6,16 +6,34 @@ import { Strategy } from "passport-local";
 import session from "express-session";
 import env from "dotenv";
 import pkg from "pg";
-const { Client } = pkg;
 
-// Load environment variables
+const { Client } = pkg;
 env.config();
 
-// PostgreSQL connection
+// PostgreSQL connection (RDS)
 const client = new Client({
-  connectionString: process.env.NEON_DB,
+  connectionString: process.env.RDS_DB,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
-await client.connect(); // Ensure DB connection before any query
+
+try {
+  await client.connect();
+  console.log("Connected to RDS PostgreSQL");
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      password VARCHAR(255) NOT NULL
+    )
+  `);
+  console.log("Table 'users' is ready");
+} catch (err) {
+  console.error("DB setup failed:", err);
+  process.exit(1);
+}
 
 // Express setup
 const app = express();
@@ -37,7 +55,7 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session());
 
-// ROUTES
+// Routes
 app.get("/", (req, res) => {
   res.render("home.ejs");
 });
@@ -57,26 +75,6 @@ app.get("/logout", (req, res) => {
   });
 });
 
-app.get("/music", (req, res) => {
-  res.render("music.ejs");
-});
-
-app.get("/arts", (req, res) => {
-  res.render("arts.ejs");
-});
-
-app.get("/drumkit", (req, res) => {
-  res.render("drumkit.ejs");
-});
-
-app.get("/paint", (req, res) => {
-  res.render("paint.ejs");
-});
-
-app.get("/science", (req, res) => {
-  res.redirect("https://fold.it/play");
-});
-
 app.get("/secrets", (req, res) => {
   if (req.isAuthenticated()) {
     res.render("secrets.ejs");
@@ -85,14 +83,31 @@ app.get("/secrets", (req, res) => {
   }
 });
 
-app.post(
-  "/login",
-  passport.authenticate("local", {
-    successRedirect: "/secrets",
-    failureRedirect: "/login",
-  })
-);
+app.get("/secrets", (req, res) => {
+  res.render("secrets.ejs");
+});
 
+app.get("/music",(req, res)=>{
+  res.render("music.ejs")
+});
+
+app.get("/arts",(req, res)=>{
+  res.render("arts.ejs")
+;})
+
+app.get("/drumkit",(req, res)=>{
+  res.render("drumkit.ejs")
+});
+
+app.get("/paint",(req, res)=>{
+  res.render("paint.ejs")
+});
+
+app.get("/science",(req, res)=>{
+  res.redirect("https://fold.it/play")
+;})
+
+// Registration
 app.post("/register", async (req, res) => {
   const email = req.body.username;
   const password = req.body.password;
@@ -101,37 +116,39 @@ app.post("/register", async (req, res) => {
     const checkResult = await client.query("SELECT * FROM users WHERE email = $1", [email]);
 
     if (checkResult.rows.length > 0) {
-      res.redirect("/login");
-    } else {
-      bcrypt.hash(password, saltRounds, async (err, hash) => {
-        if (err) {
-          console.error("Hash error:", err);
-          return res.send("Server error");
-        }
-
-        const insertResult = await client.query(
-          "INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *",
-          [email, hash]
-        );
-
-        const user = insertResult.rows[0];
-
-        req.login(user, (err) => {
-          if (err) {
-            console.error("Login error:", err);
-            return res.redirect("/login");
-          }
-          res.redirect("/secrets");
-        });
-      });
+      return res.redirect("/login");
     }
+
+    bcrypt.hash(password, saltRounds, async (err, hash) => {
+      if (err) return res.send("Server error");
+
+      const insertResult = await client.query(
+        "INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *",
+        [email, hash]
+      );
+
+      const user = insertResult.rows[0];
+      req.login(user, (err) => {
+        if (err) return res.redirect("/login");
+        res.redirect("/secrets");
+      });
+    });
   } catch (err) {
-    console.error("DB error:", err);
+    console.error("Registration error:", err);
     res.status(500).send("Internal server error");
   }
 });
 
-// Passport setup
+// Login
+app.post(
+  "/login",
+  passport.authenticate("local", {
+    successRedirect: "/secrets",
+    failureRedirect: "/login",
+  })
+);
+
+// Passport strategy
 passport.use(
   new Strategy(async function verify(username, password, cb) {
     try {
@@ -162,7 +179,7 @@ passport.deserializeUser(async (id, cb) => {
   }
 });
 
-// Server start
+// Start server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
